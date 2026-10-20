@@ -122,13 +122,14 @@ let _db;
 const ouvrir = () => _db ? Promise.resolve(_db) : new Promise((ok, ko) => {
   const r = indexedDB.open(NOM, VERSION);
   r.onupgradeneeded = () => { for (const [s, k] of Object.entries(STORES)) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s, { keyPath: k }); };
-  r.onsuccess = () => ok((_db = r.result)); r.onerror = () => ko(r.error);
+  const delai = setTimeout(() => { const e = new Error('Mise à jour des données bloquée : une autre fenêtre ou copie de l\'application est ouverte. Fermez-la complètement (retirez-la des applications récentes), puis rouvrez Mon Technicien.'); e.bloque = true; ko(e); }, 6000);
+  r.onsuccess = () => { clearTimeout(delai); r.result.onversionchange = () => { r.result.close(); _db = null; }; ok((_db = r.result)); }; r.onerror = () => { clearTimeout(delai); ko(r.error); };
 });
 const tx = async (s, mode, f) => { const db = await ouvrir(); return new Promise((ok, ko) => { const t = db.transaction(s, mode), q = f(t.objectStore(s)); t.oncomplete = () => ok(q?.result); t.onerror = t.onabort = () => ko(t.error); }); };
 const stockage = { mode: 'indexedDB' }; // passe à 'memoire' si le navigateur interdit IndexedDB (ex. fichier ouvert via content://)
 const MEM = { cycles: new Map(), mesures: new Map(), meta: new Map(), achats: new Map(), chrono: new Map(), invest: new Map(), charges: new Map(), activites: new Map() }, cl = (x) => JSON.parse(JSON.stringify(x));
 const mem = (s, o, a) => (o === 'put' ? void MEM[s].set(a[STORES[s]], cl(a)) : o === 'all' ? [...MEM[s].values()].map(cl) : o === 'get' ? (MEM[s].has(a) ? cl(MEM[s].get(a)) : undefined) : void MEM[s].delete(a));
-const op = async (s, o, a, mode, f) => { if (stockage.mode === 'indexedDB') { try { return await tx(s, mode, f); } catch (e) { if (_db) throw e; stockage.mode = 'memoire'; } } return mem(s, o, a); };
+const op = async (s, o, a, mode, f) => { if (stockage.mode === 'indexedDB') { try { return await tx(s, mode, f); } catch (e) { if (_db || e.bloque) throw e; stockage.mode = 'memoire'; } } return mem(s, o, a); };
 const put = (s, o) => op(s, 'put', o, 'readwrite', (st) => st.put(o));
 const all = (s) => op(s, 'all', null, 'readonly', (st) => st.getAll());
 const get = (s, k) => op(s, 'get', k, 'readonly', (st) => st.get(k));
@@ -567,7 +568,8 @@ document.addEventListener('change', async (e) => {
 addEventListener('online', rendre); addEventListener('offline', rendre);
 (async () => {
   try { navigator.storage?.persist?.(); await charger(); } catch (e) { $('#v').innerHTML = `<div class="card"><h3>Stockage indisponible</h3><p>${esc(e.message)}</p></div>`; return; }
-  await C.observer('OUVERTURE'); S.ch = await C.lire(); rendre();
+  try { await C.observer('OUVERTURE'); S.ch = await C.lire(); } catch (e) { $('#v').innerHTML = `<div class="card"><h3>Démarrage impossible</h3><p>${esc(e.message)}</p></div>`; return; }
+  rendre();
   const obs = (e) => C.observer(e).then(async () => { S.ch = await C.lire(); if (S.vue === 'plus') rendre(); }).catch(() => {});
   setInterval(() => !document.hidden && obs('PERIODIQUE'), 6e4); document.addEventListener('visibilitychange', () => !document.hidden && obs('RETOUR_APPLICATION'));
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('./sw.js').then((r) => r.addEventListener('updatefound', () => toast('Nouvelle version prête : rouvrez l\'application.'))).catch(() => {});
